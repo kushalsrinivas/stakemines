@@ -1,13 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import type React from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Animated,
   Dimensions,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import Leaderboard from "./Leaderboard";
 
 // Define cell type
 type Cell = {
@@ -19,15 +22,96 @@ type Cell = {
 const GRID_SIZE = 5;
 const BOMB_COUNT = 6;
 const CELL_SIZE = Dimensions.get("window").width / (GRID_SIZE + 1);
+const HIGH_SCORE_KEY = "@minestake_high_score";
 
 const MineStake: React.FC = () => {
   // Game state
   const [grid, setGrid] = useState<Cell[][]>([]);
   const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(0);
   const [gameOver, setGameOver] = useState(false);
   const [gameWon, setGameWon] = useState(false);
   const [totalDiamonds, setTotalDiamonds] = useState(0);
   const [revealedDiamonds, setRevealedDiamonds] = useState(0);
+  const [isNewHighScore, setIsNewHighScore] = useState(false);
+  const [leaderboardVisible, setLeaderboardVisible] = useState(false);
+
+  // Animation values
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Pulse animation for new high score
+  useEffect(() => {
+    if (isNewHighScore) {
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.2,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        // Repeat the animation a few times
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.2,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      });
+    }
+  }, [isNewHighScore, pulseAnim]);
+
+  // Load high score from AsyncStorage
+  useEffect(() => {
+    const loadHighScore = async () => {
+      try {
+        const storedHighScore = await AsyncStorage.getItem(HIGH_SCORE_KEY);
+        if (storedHighScore !== null) {
+          setHighScore(Number.parseInt(storedHighScore, 10));
+        }
+      } catch (error) {
+        console.error("Failed to load high score:", error);
+      }
+    };
+
+    loadHighScore();
+  }, []);
+
+  // Save high score to AsyncStorage
+  const updateHighScore = useCallback(
+    async (newScore: number) => {
+      if (newScore > highScore) {
+        try {
+          await AsyncStorage.setItem(HIGH_SCORE_KEY, newScore.toString());
+          setHighScore(newScore);
+          setIsNewHighScore(true);
+        } catch (error) {
+          console.error("Failed to save high score:", error);
+        }
+      }
+    },
+    [highScore]
+  );
+
+  // Handle showing leaderboard
+  const showLeaderboard = () => {
+    setLeaderboardVisible(true);
+  };
+
+  // Hide leaderboard
+  const hideLeaderboard = () => {
+    setLeaderboardVisible(false);
+  };
 
   // Initialize the game
   const initializeGame = useCallback(() => {
@@ -65,6 +149,7 @@ const MineStake: React.FC = () => {
     setGameWon(false);
     setTotalDiamonds(diamonds);
     setRevealedDiamonds(0);
+    setIsNewHighScore(false);
   }, []);
 
   // Initialize game on component mount
@@ -93,14 +178,19 @@ const MineStake: React.FC = () => {
     if (newGrid[row][col].type === "bomb") {
       // Game over if bomb
       setGameOver(true);
+      // Update high score when game ends
+      updateHighScore(score);
     } else {
       // Update score if diamond
-      setScore((prev) => prev + 1);
+      const newScore = score + 1;
+      setScore(newScore);
       setRevealedDiamonds((prev) => prev + 1);
 
       // Check if all diamonds are revealed
       if (revealedDiamonds + 1 === totalDiamonds) {
         setGameWon(true);
+        // Update high score when game is won
+        updateHighScore(newScore);
       }
     }
   };
@@ -138,6 +228,20 @@ const MineStake: React.FC = () => {
         <Text style={styles.score}>
           Score: {score} / {totalDiamonds}
         </Text>
+        <TouchableOpacity onPress={showLeaderboard}>
+          <Animated.Text
+            style={[
+              styles.highScore,
+              isNewHighScore && {
+                transform: [{ scale: pulseAnim }],
+                color: "#FF0000",
+              },
+            ]}
+          >
+            {isNewHighScore ? "🏆 New High Score: " : "High Score: "}
+            {highScore}
+          </Animated.Text>
+        </TouchableOpacity>
       </View>
 
       {(gameOver || gameWon) && (
@@ -156,9 +260,25 @@ const MineStake: React.FC = () => {
         ))}
       </View>
 
-      <TouchableOpacity style={styles.button} onPress={initializeGame}>
-        <Text style={styles.buttonText}>Restart Game</Text>
-      </TouchableOpacity>
+      <View style={styles.buttonRow}>
+        <TouchableOpacity style={styles.button} onPress={initializeGame}>
+          <Text style={styles.buttonText}>Restart Game</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.button, styles.leaderboardButton]}
+          onPress={showLeaderboard}
+        >
+          <Text style={styles.buttonText}>Leaderboard</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Leaderboard Modal */}
+      <Leaderboard
+        visible={leaderboardVisible}
+        onClose={hideLeaderboard}
+        currentScore={gameOver || gameWon ? score : undefined}
+      />
     </View>
   );
 };
@@ -185,6 +305,12 @@ const styles = StyleSheet.create({
   score: {
     fontSize: 20,
     fontWeight: "500",
+    marginBottom: 4,
+  },
+  highScore: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#FF6B00",
   },
   grid: {
     flexDirection: "column",
@@ -225,12 +351,24 @@ const styles = StyleSheet.create({
     color: "white",
     textAlign: "center",
   },
+  buttonRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+    paddingHorizontal: 20,
+    marginTop: 20,
+  },
   button: {
     backgroundColor: "#1e90ff",
     paddingVertical: 12,
-    paddingHorizontal: 32,
+    paddingHorizontal: 24,
     borderRadius: 8,
-    marginTop: 20,
+    flex: 1,
+    marginHorizontal: 8,
+    alignItems: "center",
+  },
+  leaderboardButton: {
+    backgroundColor: "#FF6B00",
   },
   buttonText: {
     color: "white",
